@@ -1,6 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Plus, BarChart3, Clock, Send, MessageCircle, Trash2, User } from 'lucide-react';
-import io from 'socket.io-client';
+
+// Helper functions for localStorage management
+const storageKeys = {
+  DATA_STORE: 'pollingSystem_dataStore',
+  SESSION_ID: 'pollingSystem_sessionId'
+};
+
+const getStoredData = () => {
+  try {
+    const data = localStorage.getItem(storageKeys.DATA_STORE);
+    return data ? JSON.parse(data) : null;
+  } catch (error) {
+    console.error('Error reading from localStorage:', error);
+    return null;
+  }
+};
+
+const setStoredData = (data) => {
+  try {
+    localStorage.setItem(storageKeys.DATA_STORE, JSON.stringify(data));
+  } catch (error) {
+    console.error('Error writing to localStorage:', error);
+  }
+};
 
 const LivePollingSystem = () => {
   const [userType, setUserType] = useState('');
@@ -17,156 +40,74 @@ const LivePollingSystem = () => {
   const [chatMessages, setChatMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [pollTimeLimit, setPollTimeLimit] = useState(60);
-  const [sessionId] = useState(() => Math.random().toString(36).substring(7));
+  const [createPollError, setCreatePollError] = useState('');
 
+  // Use a shared session ID across tabs
+  const [sessionId, setSessionId] = useState(() => {
+    const storedId = localStorage.getItem(storageKeys.SESSION_ID);
+    if (storedId) return storedId;
+    
+    const newId = Math.random().toString(36).substring(7);
+    localStorage.setItem(storageKeys.SESSION_ID, newId);
+    return newId;
+  });
 
-
-// Inside your component, add socket connection
-const LivePollingSystem = () => {
-  // ... your existing state
-  const [socket, setSocket] = useState(null);
-
-  useEffect(() => {
-    // Connect to the backend
-    const newSocket = io('http://localhost:3001');
-    setSocket(newSocket);
-
-    // Join the session
-    newSocket.emit('join-session', {
-      sessionId,
-      userType,
-      studentName: userType === 'student' ? studentName : undefined
-    });
-
-    // Listen for session data
-    newSocket.on('session-data', (sessionData) => {
-      setDataStore(sessionData);
-      setConnectedStudents(sessionData.students);
-      setChatMessages(sessionData.messages);
-      
-      if (sessionData.activePoll) {
-        setCurrentPoll(sessionData.activePoll);
-        setTimeLeft(sessionData.activePoll.timeLimit);
-        setPollResults(sessionData.pollAnswers);
-        
-        // Check if current user has already answered
-        if (userType === 'student' && studentName) {
-          const hasAnswered = sessionData.pollAnswers.some(
-            a => a.studentName === studentName
-          );
-          setHasAnswered(hasAnswered);
-        }
-      }
-    });
-
-    newSocket.on('new-poll', (poll) => {
-      setCurrentPoll(poll);
-      setTimeLeft(poll.timeLimit);
-      setHasAnswered(false);
-      setShowResults(false);
-      setPollResults([]);
-    });
-
-    newSocket.on('students-updated', (students) => {
-      setConnectedStudents(students);
-    });
-
-    newSocket.on('answer-received', (answers) => {
-      setPollResults(answers);
-    });
-
-    newSocket.on('new-message', (messages) => {
-      setChatMessages(messages);
-    });
-
-    return () => newSocket.close();
-  }, [sessionId, userType, studentName]);
-
-  // Update your handlers to use socket emits
-  const handleCreatePoll = () => {
-    if (newPollQuestion.trim() && newPollOptions.filter(opt => opt.trim()).length >= 2) {
-      const pollData = {
-        question: newPollQuestion,
-        options: newPollOptions.filter(opt => opt.trim()),
-        timeLimit: pollTimeLimit
-      };
-
-      socket.emit('create-poll', {
-        sessionId,
-        pollData
-      });
-
-      setNewPollQuestion('');
-      setNewPollOptions(['', '', '', '']);
-    }
-  };
-
-  const handleAnswerSubmit = (optionIndex) => {
-    if (!hasAnswered && currentPoll) {
-      const answerData = {
-        studentName,
-        answer: optionIndex,
-        timestamp: new Date()
-      };
-
-      socket.emit('submit-answer', {
-        sessionId,
-        answerData
-      });
-
-      setHasAnswered(true);
-    }
-  };
-
-  const handleRemoveStudent = (studentToRemove) => {
-    socket.emit('remove-student', {
-      sessionId,
-      studentName: studentToRemove
-    });
-  };
-
-  const handleSendMessage = () => {
-    if (newMessage.trim()) {
-      const message = {
-        sender: userType === 'teacher' ? 'Teacher' : studentName,
-        message: newMessage
-      };
-
-      socket.emit('send-message', {
-        sessionId,
-        message
-      });
-
-      setNewMessage('');
-    }
-  };
-
-  // ... rest of your component
-};
   // Teacher form states
   const [newPollQuestion, setNewPollQuestion] = useState('');
   const [newPollOptions, setNewPollOptions] = useState(['', '', '', '']);
 
-  // Simulated data store
-  const [dataStore, setDataStore] = useState({
-    polls: [],
-    students: [],
-    messages: [],
-    activePoll: null,
-    pollAnswers: []
+  // Initialize data store from localStorage or create a new one
+  const [dataStore, setDataStore] = useState(() => {
+    const storedData = getStoredData();
+    return storedData || {
+      polls: [],
+      students: [],
+      messages: [],
+      activePoll: null,
+      pollAnswers: []
+    };
   });
 
-  // Simulate real-time updates with polling
+  // Effect to sync dataStore with localStorage
+  useEffect(() => {
+    setStoredData(dataStore);
+  }, [dataStore]);
+
+  // Effect to listen for storage changes (for cross-tab communication)
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === storageKeys.DATA_STORE && e.newValue) {
+        try {
+          const newData = JSON.parse(e.newValue);
+          setDataStore(newData);
+        } catch (error) {
+          console.error('Error parsing storage data:', error);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // Effect to periodically check for updates (fallback for some browsers)
   useEffect(() => {
     const interval = setInterval(() => {
-      // Simulate fetching latest data from server
-      if (userType) {
-        updateRealTimeData();
+      const storedData = getStoredData();
+      if (storedData) {
+        setDataStore(storedData);
       }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [userType, sessionId]);
+  }, []);
+
+  // Simulate real-time updates with polling
+  useEffect(() => {
+    if (userType) {
+      updateRealTimeData();
+    }
+  }, [userType, sessionId, dataStore]);
 
   // Timer for active polls
   useEffect(() => {
@@ -186,25 +127,35 @@ const LivePollingSystem = () => {
   }, [currentPoll, timeLeft, showResults]);
 
   const updateRealTimeData = () => {
-    // Simulate getting updated data from server
-    setConnectedStudents(dataStore.students);
-    setChatMessages(dataStore.messages);
+    // Update from the shared data store
+    setConnectedStudents(dataStore.students || []);
+    setChatMessages(dataStore.messages || []);
     
-    if (dataStore.activePoll && !currentPoll) {
-      setCurrentPoll(dataStore.activePoll);
-      setTimeLeft(dataStore.activePoll.timeLimit);
-      setHasAnswered(false);
-      setShowResults(false);
-    }
-
-    // Update poll results
-    if (dataStore.activePoll && dataStore.pollAnswers.length > 0) {
-      setPollResults(dataStore.pollAnswers);
+    if (dataStore.activePoll) {
+      // Check if this is a new poll
+      if (!currentPoll || currentPoll.id !== dataStore.activePoll.id) {
+        setCurrentPoll(dataStore.activePoll);
+        setTimeLeft(dataStore.activePoll.timeLimit);
+        setHasAnswered(false);
+        setShowResults(false);
+        
+        // Check if current student has already answered this poll
+        if (userType === 'student' && studentName) {
+          const hasAnswered = dataStore.pollAnswers.some(
+            a => a.studentName === studentName && a.pollId === dataStore.activePoll.id
+          );
+          setHasAnswered(hasAnswered);
+        }
+      }
+      
+      // Update poll results
+      setPollResults(dataStore.pollAnswers.filter(a => a.pollId === dataStore.activePoll.id) || []);
+    } else {
+      setCurrentPoll(null);
     }
 
     // Check if all students answered or time is up
-    if (dataStore.activePoll && 
-        (dataStore.pollAnswers.length >= dataStore.students.length || timeLeft <= 0)) {
+    if (dataStore.activePoll && timeLeft <= 0) {
       setShowResults(true);
     }
   };
@@ -240,31 +191,53 @@ const LivePollingSystem = () => {
   };
 
   const handleCreatePoll = () => {
-    if (newPollQuestion.trim() && newPollOptions.filter(opt => opt.trim()).length >= 2) {
-      const pollData = {
-        id: Date.now().toString(),
-        question: newPollQuestion,
-        options: newPollOptions.filter(opt => opt.trim()),
-        timeLimit: pollTimeLimit,
-        createdAt: new Date()
-      };
-
-      setDataStore(prev => ({
-        ...prev,
-        activePoll: pollData,
-        pollAnswers: [],
-        polls: [...prev.polls, pollData]
-      }));
-
-      setCurrentPoll(pollData);
-      setTimeLeft(pollTimeLimit);
-      setHasAnswered(false);
-      setShowResults(false);
-      setPollResults([]);
-
-      setNewPollQuestion('');
-      setNewPollOptions(['', '', '', '']);
+    setCreatePollError('');
+    
+    // Validate the poll question
+    if (!newPollQuestion.trim()) {
+      setCreatePollError('Poll question is required');
+      return;
     }
+    
+    // Validate at least two options are provided
+    const validOptions = newPollOptions.filter(opt => opt.trim());
+    if (validOptions.length < 2) {
+      setCreatePollError('At least two options are required');
+      return;
+    }
+    
+    // Validate time limit
+    if (pollTimeLimit < 10 || pollTimeLimit > 300) {
+      setCreatePollError('Time limit must be between 10 and 300 seconds');
+      return;
+    }
+
+    // If validation passes, create the poll
+    const pollData = {
+      id: Date.now().toString(),
+      question: newPollQuestion,
+      options: validOptions,
+      timeLimit: pollTimeLimit,
+      createdAt: new Date()
+    };
+
+    setDataStore(prev => ({
+      ...prev,
+      activePoll: pollData,
+      pollAnswers: prev.pollAnswers.filter(a => a.pollId !== pollData.id), // Clear previous answers for this poll
+      polls: [...prev.polls, pollData]
+    }));
+
+    setCurrentPoll(pollData);
+    setTimeLeft(pollTimeLimit);
+    setHasAnswered(false);
+    setShowResults(false);
+    setPollResults([]);
+
+    // Reset form
+    setNewPollQuestion('');
+    setNewPollOptions(['', '', '', '']);
+    setCreatePollError('');
   };
 
   const handleAnswerSubmit = (optionIndex) => {
@@ -272,20 +245,21 @@ const LivePollingSystem = () => {
       const answerData = {
         studentName,
         answer: optionIndex,
+        pollId: currentPoll.id,
         timestamp: new Date()
       };
 
       setDataStore(prev => ({
         ...prev,
-        pollAnswers: [...prev.pollAnswers, answerData]
+        pollAnswers: [
+          ...prev.pollAnswers.filter(a => 
+            !(a.studentName === studentName && a.pollId === currentPoll.id)
+          ),
+          answerData
+        ]
       }));
 
       setHasAnswered(true);
-      
-      // Show results immediately for the student who answered
-      setTimeout(() => {
-        setPollResults(prev => [...prev, answerData]);
-      }, 500);
     }
   };
 
@@ -319,6 +293,24 @@ const LivePollingSystem = () => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const addPollOption = () => {
+    setNewPollOptions([...newPollOptions, '']);
+  };
+
+  const removePollOption = (index) => {
+    if (newPollOptions.length > 2) {
+      const updatedOptions = [...newPollOptions];
+      updatedOptions.splice(index, 1);
+      setNewPollOptions(updatedOptions);
+    }
+  };
+
+  const updatePollOption = (index, value) => {
+    const updatedOptions = [...newPollOptions];
+    updatedOptions[index] = value;
+    setNewPollOptions(updatedOptions);
   };
 
   if (!userType) {
@@ -393,6 +385,9 @@ const LivePollingSystem = () => {
             <div className="flex items-center gap-3">
               <BarChart3 className="w-8 h-8 text-indigo-600" />
               <h1 className="text-xl font-bold text-gray-800">Live Polling System</h1>
+              <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                Session: {sessionId}
+              </span>
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm font-medium text-gray-600">
@@ -435,19 +430,30 @@ const LivePollingSystem = () => {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Options</label>
                     {newPollOptions.map((option, index) => (
-                      <input
-                        key={index}
-                        type="text"
-                        value={option}
-                        onChange={(e) => {
-                          const newOptions = [...newPollOptions];
-                          newOptions[index] = e.target.value;
-                          setNewPollOptions(newOptions);
-                        }}
-                        placeholder={`Option ${index + 1}`}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 mb-2"
-                      />
+                      <div key={index} className="flex items-center gap-2 mb-2">
+                        <input
+                          type="text"
+                          value={option}
+                          onChange={(e) => updatePollOption(index, e.target.value)}
+                          placeholder={`Option ${index + 1}`}
+                          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                        {newPollOptions.length > 2 && (
+                          <button
+                            onClick={() => removePollOption(index)}
+                            className="p-2 text-red-500 hover:bg-red-50 rounded-lg"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     ))}
+                    <button
+                      onClick={addPollOption}
+                      className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                    >
+                      + Add another option
+                    </button>
                   </div>
                   
                   <div>
@@ -462,22 +468,22 @@ const LivePollingSystem = () => {
                     />
                   </div>
                   
+                  {createPollError && (
+                    <div className="text-red-500 text-sm">{createPollError}</div>
+                  )}
+                  
                   <button
                     onClick={handleCreatePoll}
-                    disabled={connectedStudents.length === 0}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white font-semibold py-3 px-6 rounded-lg transition duration-200"
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200"
                   >
                     Create Poll
                   </button>
-                  {connectedStudents.length === 0 && (
-                    <p className="text-sm text-gray-500 text-center">Waiting for students to join...</p>
-                  )}
                 </div>
               </div>
             )}
 
             {/* Current Poll */}
-            {currentPoll && (
+            {currentPoll ? (
               <div className="bg-white rounded-xl shadow-lg p-6">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-xl font-bold text-gray-800">Current Poll</h2>
@@ -505,11 +511,12 @@ const LivePollingSystem = () => {
                   </div>
                 )}
                 
-                {(showResults || hasAnswered || userType === 'teacher') && (
+                {(showResults || hasAnswered || userType === 'teacher' || timeLeft === 0) && (
                   <div className="space-y-3">
                     {currentPoll.options.map((option, index) => {
                       const votes = pollResults.filter(r => r.answer === index).length;
-                      const percentage = pollResults.length > 0 ? (votes / pollResults.length) * 100 : 0;
+                      const totalVotes = pollResults.length;
+                      const percentage = totalVotes > 0 ? (votes / totalVotes) * 100 : 0;
                       
                       return (
                         <div key={index} className="relative">
@@ -526,10 +533,13 @@ const LivePollingSystem = () => {
                         </div>
                       );
                     })}
+                    <div className="text-sm text-gray-500 mt-2">
+                      Total votes: {pollResults.length} out of {connectedStudents.length} students
+                    </div>
                   </div>
                 )}
                 
-                {userType === 'student' && hasAnswered && !showResults && (
+                {userType === 'student' && hasAnswered && !showResults && timeLeft > 0 && (
                   <div className="text-center py-4">
                     <p className="text-green-600 font-medium">Answer submitted! Waiting for results...</p>
                   </div>
@@ -541,9 +551,7 @@ const LivePollingSystem = () => {
                   </div>
                 )}
               </div>
-            )}
-
-            {!currentPoll && (
+            ) : (
               <div className="bg-white rounded-xl shadow-lg p-8 text-center">
                 <BarChart3 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-800 mb-2">No Active Poll</h3>
