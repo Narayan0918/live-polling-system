@@ -18,7 +18,7 @@ app.use(cors());
 app.use(express.json());
 
 // MongoDB connection
-const MONGODB_URI = 'mongodb://localhost:27017/live-polling-system';
+const MONGODB_URI = 'mongodb+srv://narayanraj:hellobuddy@home-service.elaev.mongodb.net/polling-app?retryWrites=true&w=majority&appName=home-service';
 let db;
 
 MongoClient.connect(MONGODB_URI)
