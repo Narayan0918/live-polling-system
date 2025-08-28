@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Plus, BarChart3, Clock, Send, MessageCircle, Trash2, User } from 'lucide-react';
+import io from 'socket.io-client';
 
 const LivePollingSystem = () => {
   const [userType, setUserType] = useState('');
@@ -18,6 +19,130 @@ const LivePollingSystem = () => {
   const [pollTimeLimit, setPollTimeLimit] = useState(60);
   const [sessionId] = useState(() => Math.random().toString(36).substring(7));
 
+
+
+// Inside your component, add socket connection
+const LivePollingSystem = () => {
+  // ... your existing state
+  const [socket, setSocket] = useState(null);
+
+  useEffect(() => {
+    // Connect to the backend
+    const newSocket = io('http://localhost:3001');
+    setSocket(newSocket);
+
+    // Join the session
+    newSocket.emit('join-session', {
+      sessionId,
+      userType,
+      studentName: userType === 'student' ? studentName : undefined
+    });
+
+    // Listen for session data
+    newSocket.on('session-data', (sessionData) => {
+      setDataStore(sessionData);
+      setConnectedStudents(sessionData.students);
+      setChatMessages(sessionData.messages);
+      
+      if (sessionData.activePoll) {
+        setCurrentPoll(sessionData.activePoll);
+        setTimeLeft(sessionData.activePoll.timeLimit);
+        setPollResults(sessionData.pollAnswers);
+        
+        // Check if current user has already answered
+        if (userType === 'student' && studentName) {
+          const hasAnswered = sessionData.pollAnswers.some(
+            a => a.studentName === studentName
+          );
+          setHasAnswered(hasAnswered);
+        }
+      }
+    });
+
+    newSocket.on('new-poll', (poll) => {
+      setCurrentPoll(poll);
+      setTimeLeft(poll.timeLimit);
+      setHasAnswered(false);
+      setShowResults(false);
+      setPollResults([]);
+    });
+
+    newSocket.on('students-updated', (students) => {
+      setConnectedStudents(students);
+    });
+
+    newSocket.on('answer-received', (answers) => {
+      setPollResults(answers);
+    });
+
+    newSocket.on('new-message', (messages) => {
+      setChatMessages(messages);
+    });
+
+    return () => newSocket.close();
+  }, [sessionId, userType, studentName]);
+
+  // Update your handlers to use socket emits
+  const handleCreatePoll = () => {
+    if (newPollQuestion.trim() && newPollOptions.filter(opt => opt.trim()).length >= 2) {
+      const pollData = {
+        question: newPollQuestion,
+        options: newPollOptions.filter(opt => opt.trim()),
+        timeLimit: pollTimeLimit
+      };
+
+      socket.emit('create-poll', {
+        sessionId,
+        pollData
+      });
+
+      setNewPollQuestion('');
+      setNewPollOptions(['', '', '', '']);
+    }
+  };
+
+  const handleAnswerSubmit = (optionIndex) => {
+    if (!hasAnswered && currentPoll) {
+      const answerData = {
+        studentName,
+        answer: optionIndex,
+        timestamp: new Date()
+      };
+
+      socket.emit('submit-answer', {
+        sessionId,
+        answerData
+      });
+
+      setHasAnswered(true);
+    }
+  };
+
+  const handleRemoveStudent = (studentToRemove) => {
+    socket.emit('remove-student', {
+      sessionId,
+      studentName: studentToRemove
+    });
+  };
+
+  const handleSendMessage = () => {
+    if (newMessage.trim()) {
+      const message = {
+        sender: userType === 'teacher' ? 'Teacher' : studentName,
+        message: newMessage
+      };
+
+      socket.emit('send-message', {
+        sessionId,
+        message
+      });
+
+      setNewMessage('');
+    }
+  };
+
+  // ... rest of your component
+};
   // Teacher form states
   const [newPollQuestion, setNewPollQuestion] = useState('');
   const [newPollOptions, setNewPollOptions] = useState(['', '', '', '']);
