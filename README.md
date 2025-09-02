@@ -1,4 +1,4 @@
-[https://live-polling-app-n7or.onrender.com] (DEMO)
+[DEMO](https://live-polling-app-n7or.onrender.com)
 
 
 # Getting Started with Create React App
